@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GIS Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    #panel {
+      position: absolute; z-index: 1000; top: 10px; left: 50px;
+      background: rgba(255,255,255,.92); padding: 6px 10px; border-radius: 6px;
+      font: 13px/1.4 system-ui, sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+      max-width: 60vw;
+    }
+    #panel code { background: #eef; padding: 0 3px; border-radius: 3px; }
+    .err { color: #b00; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel">Loading…</div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const panel = document.getElementById('panel');
+
+    // Base map
+    const map = L.map('map');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Resolve a data param to a full URL. Bare filenames resolve against this repo.
+    function resolveUrl(v) {
+      if (/^https?:\/\//i.test(v)) return v;
+      return new URL(v, location.href).href; // relative to the page (works on Pages)
+    }
+
+    async function run() {
+      const dataParam = qs.get('data');
+      const zoomParam = qs.get('zoom');
+      const pinParam  = qs.get('pin');
+
+      let pin = null;
+      if (pinParam) {
+        const [lat, lng] = pinParam.split(',').map(s => parseFloat(s.trim()));
+        if (Number.isFinite(lat) && Number.isFinite(lng)) pin = [lat, lng];
+        else panel.innerHTML = '<span class="err">Bad pin= value (expected lat,lng)</span>';
+      }
+
+      if (!dataParam) {
+        map.setView(pin || [39.5, -119.8], zoomParam ? +zoomParam : 6);
+        if (pin) L.marker(pin).addTo(map);
+        panel.innerHTML = 'No <code>data=</code> given. Try ' +
+          '<code>?data=rtaa.json&pin=39.4757,-119.7703&zoom=14</code>';
+        return;
+      }
+
+      // Support one or several comma-free sources: data=a.json (or full URLs).
+      const sources = dataParam.split('|').map(s => s.trim()).filter(Boolean);
+      const layer = L.geoJSON(null, {
+        style: { color: '#c0392b', weight: 2, fillOpacity: 0.15 }
+      }).addTo(map);
+
+      let loaded = 0;
+      for (const src of sources) {
+        const url = resolveUrl(src);
+        try {
+          const res = await fetch(url, { cache: 'no-cache' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          layer.addData(await res.json());
+          loaded++;
+        } catch (e) {
+          panel.innerHTML = '<span class="err">Failed to load ' + src + ': ' + e.message + '</span>';
+        }
+      }
+
+      if (pin) L.marker(pin).addTo(map).bindPopup('pin: ' + pin[0] + ', ' + pin[1]);
+
+      // View priority: pin (if given) → fit polygons → fallback.
+      if (pin) {
+        map.setView(pin, zoomParam ? +zoomParam : 14);
+      } else if (loaded && layer.getBounds().isValid()) {
+        map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+        if (zoomParam) map.setZoom(+zoomParam);
+      } else {
+        map.setView([39.5, -119.8], 6);
+      }
+
+      if (loaded) {
+        panel.innerHTML = 'Loaded <b>' + loaded + '</b> source' + (loaded > 1 ? 's' : '') +
+          (pin ? ', centered on pin.' : '.');
+      }
+    }
+
+    run();
+  </script>
+</body>
+</html>
